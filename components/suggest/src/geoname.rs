@@ -15,7 +15,10 @@
 use rusqlite::{named_params, Connection};
 use serde::Deserialize;
 use sql_support::ConnExt;
-use std::hash::{Hash, Hasher};
+use std::{
+    borrow::Cow,
+    hash::{Hash, Hasher},
+};
 use unicase::UniCase;
 use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
 
@@ -225,23 +228,34 @@ pub fn geonames_collate(a: &str, b: &str) -> std::cmp::Ordering {
     UniCase::new(collate_remove_chars(a)).cmp(&UniCase::new(collate_remove_chars(b)))
 }
 
-fn collate_remove_chars(s: &str) -> String {
-    s.nfkd()
-        .filter_map(|c| {
-            if is_combining_mark(c) {
-                // remove Unicode combining marks ("Que\u{0301}bec" => "Quebec")
-                None
-            } else {
-                match c {
-                    // remove '.' and ',' ("St. Louis, U.S.A." => "St Louis USA")
-                    '.' | ',' => None,
-                    // replace '-' with space ("Carmel-by-the-Sea" => "Carmel by the Sea")
-                    '-' => Some(' '),
-                    _ => Some(c),
+fn collate_remove_chars(s: &str) -> Cow<'_, str> {
+    let borrowable = !s
+        .nfkd()
+        .any(|c| is_combining_mark(c) || matches!(c, '.' | ',' | '-'));
+
+    if borrowable {
+        Cow::from(s)
+    } else {
+        s.nfkd()
+            .filter_map(|c| {
+                if is_combining_mark(c) {
+                    // Remove Unicode combining marks:
+                    // "Que\u{0301}bec" => "Quebec"
+                    None
+                } else {
+                    match c {
+                        // Remove '.' and ',':
+                        // "St. Louis, U.S.A." => "St Louis USA"
+                        '.' | ',' => None,
+                        // Replace '-' with space:
+                        // "Carmel-by-the-Sea" => "Carmel by the Sea"
+                        '-' => Some(' '),
+                        _ => Some(c),
+                    }
                 }
-            }
-        })
-        .collect::<String>()
+            })
+            .collect::<_>()
+    }
 }
 
 impl SuggestDao<'_> {
